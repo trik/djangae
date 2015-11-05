@@ -665,32 +665,34 @@ class ConstraintTests(TestCase):
     """
 
     def test_update_updates_markers(self):
-        initial_count = datastore.Query(UniqueMarker.kind()).Count()
+        with active_namespace(DEFAULT_NAMESPACE):
+            initial_count = datastore.Query(UniqueMarker.kind()).Count()
 
-        instance = ModelWithUniques.objects.create(name="One")
+            instance = ModelWithUniques.objects.create(name="One")
 
-        self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
 
-        qry = datastore.Query(UniqueMarker.kind())
-        qry.Order(("created", datastore.Query.DESCENDING))
+            self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
 
-        marker = [x for x in qry.Run()][0]
-        # Make sure we assigned the instance
-        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk, namespace=DEFAULT_NAMESPACE))
+            qry = datastore.Query(UniqueMarker.kind())
+            qry.Order(("created", datastore.Query.DESCENDING))
 
-        expected_marker = "{}|name:{}".format(ModelWithUniques._meta.db_table, md5("One").hexdigest())
-        self.assertEqual(expected_marker, marker.key().id_or_name())
+            marker = [x for x in qry.Run()][0]
+            # Make sure we assigned the instance
+            self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk, namespace=DEFAULT_NAMESPACE))
 
-        instance.name = "Two"
-        instance.save()
+            expected_marker = "{}|name:{}".format(ModelWithUniques._meta.db_table, md5("One").hexdigest())
+            self.assertEqual(expected_marker, marker.key().id_or_name())
 
-        self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
-        marker = [x for x in qry.Run()][0]
-        # Make sure we assigned the instance
-        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk, namespace=DEFAULT_NAMESPACE))
+            instance.name = "Two"
+            instance.save()
 
-        expected_marker = "{}|name:{}".format(ModelWithUniques._meta.db_table, md5("Two").hexdigest())
-        self.assertEqual(expected_marker, marker.key().id_or_name())
+            self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
+            marker = [x for x in qry.Run()][0]
+            # Make sure we assigned the instance
+            self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk, namespace=DEFAULT_NAMESPACE))
+
+            expected_marker = "{}|name:{}".format(ModelWithUniques._meta.db_table, md5("Two").hexdigest())
+            self.assertEqual(expected_marker, marker.key().id_or_name())
 
     def test_conflicting_insert_throws_integrity_error(self):
         ModelWithUniques.objects.create(name="One")
