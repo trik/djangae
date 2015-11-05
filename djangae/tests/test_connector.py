@@ -6,8 +6,10 @@ import random
 from cStringIO import StringIO
 from string import letters
 from hashlib import md5
+from unittest import skipIf
 
 # LIBRARIES
+from django.conf import settings
 from django.core.files.uploadhandler import StopFutureHandlers
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -37,6 +39,11 @@ from djangae.db.caching import disable_cache
 from djangae.fields import SetField, ListField, RelatedSetField
 from djangae.storage import BlobstoreFileUploadHandler
 from djangae.core import paginator
+
+from djangae.db.backends.appengine.compiler import active_namespace
+
+
+DEFAULT_NAMESPACE = settings.DATABASES["default"].get("NAMESPACE", "")
 
 
 try:
@@ -274,7 +281,7 @@ class BackendTests(TestCase):
         fruit = TestFruit.objects.create(name="Apple", color="Red")
         self.assertEqual("Unknown", fruit.origin)
 
-        instance = datastore.Get(datastore.Key.from_path(TestFruit._meta.db_table, fruit.pk))
+        instance = datastore.Get(datastore.Key.from_path(TestFruit._meta.db_table, fruit.pk, namespace=DEFAULT_NAMESPACE))
         del instance["origin"]
         datastore.Put(instance)
 
@@ -297,7 +304,7 @@ class BackendTests(TestCase):
                 self.assertEqual(query_init.calls[0].kwargs["projection"], ["color"])
 
                 # Make sure the query is an ancestor of the key
-                self.assertEqual(query_anc.calls[0].args[1], datastore.Key.from_path(TestFruit._meta.db_table, "0"))
+                self.assertEqual(query_anc.calls[0].args[1], datastore.Key.from_path(TestFruit._meta.db_table, "0", namespace=DEFAULT_NAMESPACE))
 
         # Now check projections work with more than 30 things
         with sleuth.watch('google.appengine.api.datastore.MultiQuery.__init__') as query_init:
@@ -562,12 +569,12 @@ class BackendTests(TestCase):
         # Color fields is missing (not even None)
         # we need more than 1 so we explore all sorting branches
         values = {'name': 'c'}
-        entity = datastore.Entity(TestFruit._meta.db_table, **values)
+        entity = datastore.Entity(TestFruit._meta.db_table, namespace=DEFAULT_NAMESPACE, **values)
         entity.update(values)
         datastore.Put(entity)
 
         values = {'name': 'd'}
-        entity = datastore.Entity(TestFruit._meta.db_table, **values)
+        entity = datastore.Entity(TestFruit._meta.db_table, namespace=DEFAULT_NAMESPACE, **values)
         entity.update(values)
         datastore.Put(entity)
 
@@ -669,7 +676,7 @@ class ConstraintTests(TestCase):
 
         marker = [x for x in qry.Run()][0]
         # Make sure we assigned the instance
-        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk))
+        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk, namespace=DEFAULT_NAMESPACE))
 
         expected_marker = "{}|name:{}".format(ModelWithUniques._meta.db_table, md5("One").hexdigest())
         self.assertEqual(expected_marker, marker.key().id_or_name())
@@ -680,7 +687,7 @@ class ConstraintTests(TestCase):
         self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
         marker = [x for x in qry.Run()][0]
         # Make sure we assigned the instance
-        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk))
+        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk, namespace=DEFAULT_NAMESPACE))
 
         expected_marker = "{}|name:{}".format(ModelWithUniques._meta.db_table, md5("Two").hexdigest())
         self.assertEqual(expected_marker, marker.key().id_or_name())
@@ -729,7 +736,7 @@ class ConstraintTests(TestCase):
 
         class Entity(dict):
             def __init__(self, model, id):
-                self._key = datastore.Key.from_path(model, id)
+                self._key = datastore.Key.from_path(model, id, namespace=DEFAULT_NAMESPACE)
 
             def key(self):
                 return self._key
@@ -748,18 +755,21 @@ class ConstraintTests(TestCase):
         ], ids_one)
 
     def test_error_on_update_doesnt_change_markers(self):
-        initial_count = datastore.Query(UniqueMarker.kind()).Count()
+        with active_namespace(DEFAULT_NAMESPACE):
+            initial_count = datastore.Query(UniqueMarker.kind()).Count()
 
         instance = ModelWithUniques.objects.create(name="One")
 
-        self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
+        with active_namespace(DEFAULT_NAMESPACE):
+            self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
 
-        qry = datastore.Query(UniqueMarker.kind())
-        qry.Order(("created", datastore.Query.DESCENDING))
+            qry = datastore.Query(UniqueMarker.kind())
+            qry.Order(("created", datastore.Query.DESCENDING))
 
-        marker = [ x for x in qry.Run()][0]
+            marker = [ x for x in qry.Run()][0]
+
         # Make sure we assigned the instance
-        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk))
+        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk, namespace=DEFAULT_NAMESPACE))
 
         expected_marker = "{}|name:{}".format(ModelWithUniques._meta.db_table, md5("One").hexdigest())
         self.assertEqual(expected_marker, marker.key().id_or_name())
@@ -786,10 +796,11 @@ class ConstraintTests(TestCase):
         finally:
             to_patch.Put = original
 
-        self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
-        marker = [x for x in qry.Run()][0]
+        with active_namespace(DEFAULT_NAMESPACE):
+            self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
+            marker = [x for x in qry.Run()][0]
         # Make sure we assigned the instance
-        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk))
+        self.assertEqual(marker["instance"], datastore.Key.from_path(instance._meta.db_table, instance.pk, namespace=DEFAULT_NAMESPACE))
 
         expected_marker = "{}|name:{}".format(ModelWithUniques._meta.db_table, md5("One").hexdigest())
         self.assertEqual(expected_marker, marker.key().id_or_name())
@@ -845,7 +856,8 @@ class ConstraintTests(TestCase):
         initial_count = datastore.Query(UniqueMarker.kind()).Count()
         ModelWithUniquesAndOverride.objects.create(name="One")
 
-        self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
+        with active_namespace(DEFAULT_NAMESPACE):
+            self.assertEqual(1, datastore.Query(UniqueMarker.kind()).Count() - initial_count)
 
     def test_list_field_unique_constaints(self):
         instance1 = UniqueModel.objects.create(unique_field=1, unique_combo_one=1, unique_list_field=["A", "C"])
@@ -1541,6 +1553,33 @@ class TestSpecialIndexers(TestCase):
             qry = self.qry.filter(sample_list__iregex=pattern)
             expected = [sample_list for sample_list in self.lists if any([bool(re.search(pattern, x, flags=re.I)) for x in sample_list])]
             self.assertEqual(len(qry), len(expected))
+
+
+
+class NamespaceTests(TestCase):
+    @skipIf("ns1" not in settings.DATABASES, "This test is designed for the Djangae testapp settings")
+    def test_database_specific_namespaces(self):
+        TestFruit.objects.create(name="Apple", color="Red")
+        TestFruit.objects.create(name="Orange", color="Orange")
+
+        TestFruit.objects.using("ns1").create(name="Apple", color="Red")
+
+        self.assertEqual(1, TestFruit.objects.using("ns1").count())
+        self.assertEqual(2, TestFruit.objects.count())
+
+        with self.assertRaises(TestFruit.DoesNotExist):
+            TestFruit.objects.using("ns1").get(name="Orange")
+
+        try:
+            TestFruit.objects.get(name="Orange")
+        except TestFruit.DoesNotExist:
+            self.fail("Unable to retrieve fruit from the default namespace")
+
+        self.assertEqual(1, TestFruit.objects.filter(name="Orange", color="Orange").count())
+        self.assertEqual(0, TestFruit.objects.using("ns1").filter(name="Orange", color="Orange").count())
+
+    def test_no_database_namespace_defaults_to_empty(self):
+        pass
 
 
 def deferred_func():

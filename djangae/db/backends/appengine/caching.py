@@ -3,11 +3,10 @@ import threading
 import itertools
 
 from google.appengine.api import datastore
+from google.appengine.api import namespace_manager
 
 from django.conf import settings
 from django.core.cache import cache
-from django.core.signals import request_finished, request_started
-from django.dispatch import receiver
 from djangae.db import utils
 from djangae.db.unique_utils import unique_identifiers_from_entity, _format_value_for_identifier
 from djangae.db.backends.appengine.context import ContextStack
@@ -43,8 +42,30 @@ def ensure_context():
     context.stack = context.stack if hasattr(context, "stack") else ContextStack()
 
 
+def _apply_namespace(value_or_map):
+    namespace = namespace_manager.get_namespace()
+
+    if hasattr(value_or_map, "keys"):
+        return { "{}:{}".format(namespace, k):v for k,v in value_or_map.iteritems() }
+    elif hasattr(value_or_map, "__iter__"):
+        return [ "{}:{}".format(namespace, x) for x in value_or_map ]
+    else:
+        return "{}:{}".format(namespace, value_or_map)
+
+def _strip_namespace(value_or_map):
+    def _strip(value):
+        return value.split(":",1)[-1]
+
+    if hasattr(value_or_map, "keys"):
+        return { _strip(k):v for k,v in value_or_map.iteritems() }
+    elif hasattr(value_or_map, "__iter__"):
+        return [ _strip(x) for x in value_or_map ]
+    else:
+        return _strip(value_or_map)
+
+
 def _add_entity_to_memcache(model, mc_key_entity_map):
-    cache.set_many(mc_key_entity_map, timeout=CACHE_TIMEOUT_SECONDS)
+    cache.set_many(_apply_namespace(mc_key_entity_map), timeout=CACHE_TIMEOUT_SECONDS)
 
 
 def _get_cache_key_and_model_from_datastore_key(key):
@@ -72,24 +93,24 @@ def _remove_entities_from_memcache_by_key(keys):
     cache_keys = dict(
         _get_cache_key_and_model_from_datastore_key(key) for key in keys
     )
-    entities = cache.get_many(cache_keys.keys())
+    entities = _strip_namespace(cache.get_many(_apply_namespace(cache_keys.keys())))
 
     if entities:
         identifiers = [
             unique_identifiers_from_entity(cache_keys[key], entity)
             for key, entity in entities.items()
         ]
-        cache.delete_many(itertools.chain(*identifiers))
+        cache.delete_many(_apply_namespace(itertools.chain(*identifiers)))
 
 
 def _get_entity_from_memcache(identifier):
-    return cache.get(identifier)
+    return cache.get(_apply_namespace(identifier))
 
 
 def _get_entity_from_memcache_by_key(key):
     # We build the cache key for the ID of the instance
     cache_key, _ = _get_cache_key_and_model_from_datastore_key(key)
-    return cache.get(cache_key)
+    return cache.get(_apply_namespace(cache_key))
 
 
 def add_entities_to_cache(model, entities, situation, skip_memcache=False):
@@ -110,7 +131,7 @@ def add_entities_to_cache(model, entities, situation, skip_memcache=False):
     ]
 
     for ent_identifiers, entity in zip(identifiers, entities):
-        get_context().stack.top.cache_entity(ent_identifiers, entity, situation)
+        get_context().stack.top.cache_entity(_apply_namespace(ent_identifiers), entity, situation)
 
     # Only cache in memcache of we are doing a GET (outside a transaction) or PUT (outside a transaction)
     # the exception is GET_PUT - which we do in our own transaction so we have to ignore that!
@@ -141,7 +162,7 @@ def remove_entities_from_cache_by_key(keys, memcache_only=False):
 
     if not memcache_only:
         for key in keys:
-            for identifier in _context.stack.top.reverse_cache.get(key, []):
+            for identifier in _context.stack.top.reverse_cache.get(_apply_namespace(key), []):
                 if identifier in _context.stack.top.cache:
                     del _context.stack.top.cache[identifier]
 
@@ -161,7 +182,7 @@ def get_from_cache_by_key(key):
     ret = None
     if _context.context_enabled:
         # It's safe to hit the context cache, because a new one was pushed on the stack at the start of the transaction
-        ret = _context.stack.top.get_entity_by_key(key)
+        ret = _context.stack.top.get_entity_by_key(_apply_namespace(key))
         if ret is None and not datastore.IsInTransaction():
             if _context.memcache_enabled:
                 ret = _get_entity_from_memcache_by_key(key)
@@ -193,7 +214,7 @@ def get_from_cache(unique_identifier):
     ret = None
     if context.context_enabled:
         # It's safe to hit the context cache, because a new one was pushed on the stack at the start of the transaction
-        ret = context.stack.top.get_entity(unique_identifier)
+        ret = context.stack.top.get_entity(_apply_namespace(unique_identifier))
         if ret is None and not datastore.IsInTransaction():
             if context.memcache_enabled:
                 ret = _get_entity_from_memcache(unique_identifier)

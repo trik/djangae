@@ -1,5 +1,7 @@
 #LIBRARIES
 import django
+import contextlib
+
 from django.db.models.sql import compiler
 
 #DJANGAE
@@ -9,6 +11,17 @@ from .commands import (
     UpdateCommand,
     DeleteCommand
 )
+
+@contextlib.contextmanager
+def active_namespace(namespace):
+    from google.appengine.api import namespace_manager
+
+    try:
+        namespace_manager.set_namespace(namespace)
+        yield
+    finally:
+        namespace_manager.set_namespace('')
+
 
 class SQLCompiler(compiler.SQLCompiler):
     def as_sql(self, with_limits=True, with_col_aliases=False, subquery=False):
@@ -26,7 +39,7 @@ class SQLCompiler(compiler.SQLCompiler):
         return super(SQLCompiler, self).get_select()
 
 
-class SQLInsertCompiler(compiler.SQLInsertCompiler, SQLCompiler):
+class SQLInsertCompiler(SQLCompiler, compiler.SQLInsertCompiler):
     def __init__(self, *args, **kwargs):
         self.return_id = None
         super(SQLInsertCompiler, self).__init__(*args, **kwargs)
@@ -44,16 +57,12 @@ class SQLInsertCompiler(compiler.SQLInsertCompiler, SQLCompiler):
         ]
 
 
-class SQLDeleteCompiler(compiler.SQLDeleteCompiler, SQLCompiler):
+class SQLDeleteCompiler(SQLCompiler, compiler.SQLDeleteCompiler):
     def as_sql(self, with_limits=True, with_col_aliases=False, subquery=False):
         return (DeleteCommand(self.connection, self.query), tuple())
 
 
-class SQLUpdateCompiler(compiler.SQLUpdateCompiler, SQLCompiler):
-
-    def __init__(self, *args, **kwargs):
-        super(SQLUpdateCompiler, self).__init__(*args, **kwargs)
-
+class SQLUpdateCompiler(SQLCompiler, compiler.SQLUpdateCompiler):
     def as_sql(self, with_limits=True, with_col_aliases=False, subquery=False):
         self.pre_sql_setup()
         return (UpdateCommand(self.connection, self.query), tuple())

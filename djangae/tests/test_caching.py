@@ -15,7 +15,7 @@ from djangae.db import unique_utils
 from djangae.db import transaction
 from djangae.db.backends.appengine.context import ContextStack
 from djangae.db.backends.appengine import caching
-from djangae.db.caching import disable_cache, clear_context_cache
+from djangae.db.caching import disable_cache, clear_context_cache, _apply_namespace
 
 
 class FakeEntity(dict):
@@ -205,7 +205,12 @@ class MemcacheCachingTests(TestCase):
         entity_data = {
             "field1": "old",
         }
-        identifiers = unique_utils.unique_identifiers_from_entity(CachingTestModel, FakeEntity(entity_data, id=222))
+
+        identifiers = _apply_namespace(
+            unique_utils.unique_identifiers_from_entity(
+                CachingTestModel, FakeEntity(entity_data, id=222)
+            )
+        )
 
         for identifier in identifiers:
             self.assertIsNone(cache.get(identifier))

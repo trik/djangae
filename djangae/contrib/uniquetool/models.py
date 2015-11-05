@@ -131,9 +131,10 @@ class CheckRepairMapper(MapReduceTask):
         action_id = kwargs.get("action_pk")
         repair = kwargs.get("repair")
 
+        namespace = connection.settings_dict.get("NAMESPACE", "")
         entity = django_instance_to_entity(connection, type(instance), instance._meta.fields, raw=True, instance=instance, check_null=False)
         identifiers = unique_identifiers_from_entity(type(instance), entity, ignore_pk=True)
-        identifier_keys = [datastore.Key.from_path(UniqueMarker.kind(), i) for i in identifiers]
+        identifier_keys = [datastore.Key.from_path(UniqueMarker.kind(), i, namespace=namespace) for i in identifiers]
 
         markers = datastore.Get(identifier_keys)
         instance_key = str(entity.key())
@@ -145,7 +146,7 @@ class CheckRepairMapper(MapReduceTask):
             if m is None:
                 # Missig marker
                 if repair:
-                    new_marker = datastore.Entity(UniqueMarker.kind(), name=i.name())
+                    new_marker = datastore.Entity(UniqueMarker.kind(), name=i.name(), namespace=namespace)
                     new_marker['instance'] = entity.key()
                     new_marker['created'] = datetime.datetime.now()
                     markers_to_save.append(new_marker)
@@ -214,6 +215,7 @@ class CleanMapper(RawMapperMixin, MapReduceTask):
         """ The Clean mapper maps over all UniqueMarker instances. """
 
         model = decode_model(model)
+        namespace = connection.settings_dict.get("NAMESPACE", "")
 
         if not entity.key().id_or_name().startswith(model._meta.db_table + "|"):
             # Only include markers which are for this model
@@ -232,7 +234,7 @@ class CleanMapper(RawMapperMixin, MapReduceTask):
             # Get the possible unique markers for the entity, if this one doesn't exist in that list then delete it
             instance = django_instance_to_entity(connection, model, instance._meta.fields, raw=True, instance=instance, check_null=False)
             identifiers = unique_identifiers_from_entity(model, instance, ignore_pk=True)
-            identifier_keys = [datastore.Key.from_path(UniqueMarker.kind(), i) for i in identifiers]
+            identifier_keys = [datastore.Key.from_path(UniqueMarker.kind(), i, namespace=namespace) for i in identifiers]
             if entity.key() not in identifier_keys:
                 logging.info("Deleting unique marker {} because the it no longer represents the associated instance state".format(entity.key().id_or_name()))
                 datastore.Delete(entity)

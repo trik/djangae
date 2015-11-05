@@ -56,7 +56,7 @@ from .commands import (
 )
 
 from djangae.db.backends.appengine import dbapi as Database
-
+from .compiler import active_namespace
 
 class Connection(object):
     """ Dummy connection class """
@@ -87,21 +87,24 @@ class Cursor(object):
         self.last_delete_command = None
 
     def execute(self, sql, *params):
-        if isinstance(sql, SelectCommand):
-            # Also catches subclasses of SelectCommand (e.g Update)
-            self.last_select_command = sql
-            self.rowcount = self.last_select_command.execute() or -1
-        elif isinstance(sql, FlushCommand):
-            sql.execute()
-        elif isinstance(sql, UpdateCommand):
-            self.rowcount = sql.execute()
-        elif isinstance(sql, DeleteCommand):
-            self.rowcount = sql.execute()
-        elif isinstance(sql, InsertCommand):
-            self.connection.queries.append(sql)
-            self.returned_ids = sql.execute()
-        else:
-            raise Database.CouldBeSupportedError("Can't execute traditional SQL: '%s' (although perhaps we could make GQL work)", sql)
+        namespace = self.connection.ops.connection.settings_dict.get("NAMESPACE", "")
+
+        with active_namespace(namespace):
+            if isinstance(sql, SelectCommand):
+                # Also catches subclasses of SelectCommand (e.g Update)
+                self.last_select_command = sql
+                self.rowcount = self.last_select_command.execute() or -1
+            elif isinstance(sql, FlushCommand):
+                sql.execute()
+            elif isinstance(sql, UpdateCommand):
+                self.rowcount = sql.execute()
+            elif isinstance(sql, DeleteCommand):
+                self.rowcount = sql.execute()
+            elif isinstance(sql, InsertCommand):
+                self.connection.queries.append(sql)
+                self.returned_ids = sql.execute()
+            else:
+                raise Database.CouldBeSupportedError("Can't execute traditional SQL: '%s' (although perhaps we could make GQL work)", sql)
 
     def next(self):
         row = self.fetchone()
@@ -278,7 +281,8 @@ class DatabaseOperations(BaseDatabaseOperations):
         return value
 
     def sql_flush(self, style, tables, seqs, allow_cascade=False):
-        return [ FlushCommand(table) for table in tables ]
+        with active_namespace(self.connection.settings_dict.get("NAMESPACE", "")):
+            return [ FlushCommand(table) for table in tables ]
 
     def prep_lookup_key(self, model, value, field):
         if isinstance(value, basestring):
@@ -523,12 +527,13 @@ class DatabaseCreation(BaseDatabaseCreation):
 class DatabaseIntrospection(BaseDatabaseIntrospection):
     @datastore.NonTransactional
     def get_table_list(self, cursor):
-        kinds = metadata.get_kinds()
-        try:
-            from django.db.backends.base.introspection import TableInfo
-            return [ TableInfo(x, "t") for x in kinds ]
-        except ImportError:
-            return kinds # Django <= 1.7
+        with active_namespace(self.connection.settings_dict.get("NAMESPACE", "")):
+            kinds = metadata.get_kinds()
+            try:
+                from django.db.backends.base.introspection import TableInfo
+                return [ TableInfo(x, "t") for x in kinds ]
+            except ImportError:
+                return kinds # Django <= 1.7
 
 
 class DatabaseSchemaEditor(BaseDatabaseSchemaEditor):

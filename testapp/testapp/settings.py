@@ -118,7 +118,12 @@ WSGI_APPLICATION = 'testapp.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'djangae.db.backends.appengine'
+        'ENGINE': 'djangae.db.backends.appengine',
+        'NAMESPACE': 'bananas'
+    },
+    "ns1": {
+        'ENGINE': 'djangae.db.backends.appengine',
+        'NAMESPACE': 'ns1',
     }
 }
 

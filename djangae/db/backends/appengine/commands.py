@@ -16,6 +16,7 @@ from django.db import IntegrityError
 from google.appengine.api import datastore, datastore_errors
 from google.appengine.api.datastore import Query
 from google.appengine.ext import db
+from google.appengine.api import namespace_manager
 
 #DJANGAE
 from djangae.db.backends.appengine.dbapi import NotSupportedError
@@ -400,8 +401,6 @@ class SelectCommand(object):
         if self.query.where and len(self.query.where.children) > 1:
             self.keys_only = False
 
-        self.excluded_pks = self.query.excluded_pks
-
     def __eq__(self, other):
         return (isinstance(other, self.__class__)
             and self.query.serialize() == other.query.serialize())
@@ -482,6 +481,16 @@ class SelectCommand(object):
                     value = self.connection.ops.value_to_db_decimal(value, field.max_digits, field.decimal_places)
                 elif isinstance(value, basestring):
                     value = coerce_unicode(value)
+                elif isinstance(value, datastore.Key):
+                    # Make sure we apply the current namespace to any lookups
+                    # by key. Fixme: if we ever add key properties this will break if
+                    # someone is trying to filter on a key which has a different namespace
+                    # to the active one.
+                    value = datastore.Key.from_path(
+                        value.kind(),
+                        value.id_or_name(),
+                        namespace=namespace_manager.get_namespace()
+                    )
 
                 # If there is already a value for this lookup, we need to make the
                 # value a list and append the new entry
@@ -529,19 +538,25 @@ class SelectCommand(object):
         # out too many! These are again limited back to the original request limit
         # while we're processing the results later
 
+        # Apply the current namespace before excluding
+        excluded_pks = [
+            datastore.Key.from_path(x.kind(), x.id_or_name(), namespace=namespace_manager.get_namespace())
+            for x in self.query.excluded_pks
+        ]
+
         high_mark = self.query.high_mark
         low_mark = self.query.low_mark
 
         excluded_pk_count = 0
-        if self.excluded_pks and high_mark:
-            excluded_pk_count = len(self.excluded_pks)
+        if excluded_pks and high_mark:
+            excluded_pk_count = len(excluded_pks)
             high_mark += excluded_pk_count
 
         limit = None if high_mark is None else (high_mark - (low_mark or 0))
         offset = low_mark or 0
 
         if self.query.kind == "COUNT":
-            if self.excluded_pks:
+            if excluded_pks:
                 # If we're excluding pks, relying on a traditional count won't work
                 # so we have two options:
                 # 1. Do a keys_only query instead and count the results excluding keys
@@ -553,7 +568,7 @@ class SelectCommand(object):
                 count_query = Query(query._Query__kind, keys_only=True)
                 count_query.update(query)
                 resultset = count_query.Run(limit=limit, offset=offset)
-                self.results = (x for x in [ len([ y for y in resultset if y not in self.excluded_pks]) ])
+                self.results = (x for x in [ len([ y for y in resultset if y not in excluded_pks]) ])
             else:
                 self.results = (x for x in [query.Count(limit=limit, offset=offset)])
             return
@@ -654,7 +669,7 @@ class SelectCommand(object):
             return result
 
         def ignore_excluded_pks(result):
-            if result.key() in self.query.excluded_pks:
+            if result.key() in excluded_pks:
                 return None
             return result
 
@@ -773,27 +788,39 @@ def reserve_id(kind, id_or_name):
 class InsertCommand(object):
     def __init__(self, connection, model, objs, fields, raw):
         self.has_pk = any([x.primary_key for x in fields])
-        self.entities = []
-        self.included_keys = []
         self.model = model
+        self.objs = objs
+        self.connection = connection
+        self.raw = raw
+        self.fields = fields
 
-        for obj in objs:
+    def execute(self):
+        included_keys = []
+        entities = []
+
+        for obj in self.objs:
             if self.has_pk:
                 # We must convert the PK value here, even though this normally happens in django_instance_to_entity otherwise
                 # custom PK fields don't work properly
-                value = model._meta.pk.get_db_prep_save(model._meta.pk.pre_save(obj, True), connection)
-                self.included_keys.append(get_datastore_key(model, value) if value else None)
-                if not self.model._meta.pk.blank and self.included_keys[-1] is None:
-                    raise IntegrityError("You must specify a primary key value for {} instances".format(model))
+                value = self.model._meta.pk.get_db_prep_save(
+                    self.model._meta.pk.pre_save(obj, True),
+                    self.connection
+                )
+                included_keys.append(
+                    get_datastore_key(self.model, value, namespace_manager.get_namespace())
+                    if value else None
+                )
+
+                if not self.model._meta.pk.blank and included_keys[-1] is None:
+                    raise IntegrityError("You must specify a primary key value for {} instances".format(self.model))
             else:
                 # We zip() self.entities and self.included_keys in execute(), so they should be the same length
-                self.included_keys.append(None)
+                included_keys.append(None)
 
-            self.entities.append(
-                django_instance_to_entity(connection, model, fields, raw, obj)
+            entities.append(
+                django_instance_to_entity(self.connection, self.model, self.fields, self.raw, obj)
             )
 
-    def execute(self):
         if self.has_pk and not has_concrete_parents(self.model):
             results = []
             # We are inserting, but we specified an ID, we need to check for existence before we Put()
@@ -802,7 +829,7 @@ class InsertCommand(object):
 
             was_in_transaction = datastore.IsInTransaction()
 
-            for key, ent in zip(self.included_keys, self.entities):
+            for key, ent in zip(included_keys, entities):
                 @db.transactional
                 def txn():
                     if key is not None:
@@ -838,25 +865,25 @@ class InsertCommand(object):
         else:
             if not constraints.constraint_checks_enabled(self.model):
                 # Fast path, just bulk insert
-                results = datastore.Put(self.entities)
-                caching.add_entities_to_cache(self.model, self.entities, caching.CachingSituation.DATASTORE_PUT)
+                results = datastore.Put(entities)
+                caching.add_entities_to_cache(self.model, entities, caching.CachingSituation.DATASTORE_PUT)
                 return results
             else:
                 markers = []
                 try:
                     #FIXME: We should rearrange this so that each entity is handled individually like above. We'll
                     # lose insert performance, but gain consistency on errors which is more important
-                    markers = constraints.acquire_bulk(self.model, self.entities)
-                    results = datastore.Put(self.entities)
+                    markers = constraints.acquire_bulk(self.model, entities)
+                    results = datastore.Put(entities)
 
-                    caching.add_entities_to_cache(self.model, self.entities, caching.CachingSituation.DATASTORE_PUT)
+                    caching.add_entities_to_cache(self.model, entities, caching.CachingSituation.DATASTORE_PUT)
 
                 except:
                     to_delete = chain(*markers)
                     constraints.release_markers(to_delete)
                     raise
 
-                for ent, k, m in zip(self.entities, results, markers):
+                for ent, k, m in zip(entities, results, markers):
                     ent.__key = k
                     constraints.update_instance_on_markers(ent, m)
 
