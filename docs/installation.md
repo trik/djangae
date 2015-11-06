@@ -70,6 +70,12 @@ It is recommended that for improved security you add `djangae.contrib.security.m
 
 > **It is highly recommended that you read the section on [Unique Constraints](db_backend/#unique-constraint-checking)**
 
+## Configuration
+
+```python DJANGAE_REMOTE_SERVER_NAME ``` Specify the custom domain your app is running on (eg. foo.bar.com). Default to {app_id}.appspost.com
+
+```python DJANGAE_REMOTE_SERVER_IS_SECURE ``` True if you app is running on https. Default to True
+
 ## Deployment
 
 Create a Google App Engine project. 
