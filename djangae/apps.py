@@ -9,6 +9,9 @@ class DjangaeConfig(AppConfig):
         from .patches.contenttypes import patch
         patch(sender=self)
 
+        from .patches import models
+        models.patch()
+
         from djangae.db.backends.appengine.caching import reset_context
         from django.core.signals import request_finished, request_started
 
