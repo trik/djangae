@@ -9,6 +9,7 @@ import logging
 import urllib
 import djangae.utils as utils
 from .utils import port_is_open, get_next_available_port
+from django.conf import settings
 
 _SCRIPT_NAME = 'dev_appserver.py'
 
@@ -183,7 +184,12 @@ def _remote(configuration=None, remote_api_stub=None, apiproxy_stub_map=None, **
     else:
         app_id = configuration.app_id
 
-    os.environ['HTTP_HOST'] = '{0}.appspot.com'.format(app_id)
+    server_name = settings.DJANGAE_REMOTE_SERVER_NAME\
+        if hasattr(settings, 'DJANGAE_REMOTE_SERVER_NAME') else '{0}.appspot.com'.format(app_id)
+    server_is_secure = settings.DJANGAE_REMOTE_SERVER_IS_SECURE\
+        if hasattr(settings, 'DJANGAE_REMOTE_SERVER_IS_SECURE') else True
+
+    os.environ['HTTP_HOST'] = server_name
     os.environ['DEFAULT_VERSION_HOSTNAME'] = os.environ['HTTP_HOST']
 
     try:
@@ -208,8 +214,8 @@ def _remote(configuration=None, remote_api_stub=None, apiproxy_stub_map=None, **
             app_id=None,
             path='/_ah/remote_api',
             auth_func=params,
-            servername='{0}.appspot.com'.format(app_id),
-            secure=True,
+            servername=server_name,
+            secure=server_is_secure,
             save_cookies=True,
             rpc_server_factory=factory
         )
@@ -219,8 +225,8 @@ def _remote(configuration=None, remote_api_stub=None, apiproxy_stub_map=None, **
             None,
             '/_ah/remote_api',
             auth_func,
-            servername='{0}.appspot.com'.format(app_id),
-            secure=True,
+            servername=server_name,
+            secure=server_is_secure,
         )
 
     ps1 = getattr(sys, 'ps1', None)
