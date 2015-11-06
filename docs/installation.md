@@ -30,6 +30,13 @@ In `app.yaml` add the following handlers:
   script: YOUR_DJANGO_APP.wsgi.application
 ```
 
+If you are planning to use remote management commands, in `app.yaml` add the following handler:
+
+```yml
+* url: /_ah/remote_api(/.*)?
+  script: google.appengine.ext.remote_api.handler.application
+```
+
 Make your `manage.py` look something like this:
 
 ```python
