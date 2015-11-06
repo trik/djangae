@@ -7,6 +7,8 @@ def patch():
 
     for app in get_apps():
         for model in get_models(app):
-            for field in model._meta.get_fields(include_parents=False):
+            fields = model._meta.get_fields(include_parents=False)\
+                if hasattr(model._meta, 'get_fields') else model._meta.fields
+            for field in fields:
                 if isinstance(field, RelatedField):
                     field.db_constraint = False
